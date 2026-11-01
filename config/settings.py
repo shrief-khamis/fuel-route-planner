@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -52,6 +53,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'api.middleware.AccessLogMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -165,3 +167,92 @@ ROUTING_CONNECT_TIMEOUT_SECONDS = float(os.environ.get('ROUTING_CONNECT_TIMEOUT_
 ROUTING_TIMEOUT_SECONDS = float(os.environ.get('ROUTING_TIMEOUT_SECONDS', '15'))
 ORS_API_KEY = os.environ.get('ORS_API_KEY', '')
 ORS_BASE_URL = os.environ.get('ORS_BASE_URL', 'https://api.heigit.org/openrouteservice')
+
+
+# Logging
+# https://docs.djangoproject.com/en/6.1/topics/logging/
+
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+LOG_CONSOLE_FORMAT = os.environ.get('LOG_CONSOLE_FORMAT', 'plain').lower()
+LOG_FILE_ENABLED = os.environ.get('LOG_FILE_ENABLED', 'false').lower() == 'true'
+LOG_DIR = BASE_DIR / os.environ.get('LOG_DIR', 'logs')
+LOG_FILE_MAX_BYTES = int(os.environ.get('LOG_FILE_MAX_BYTES', str(10 * 1024 * 1024)))
+LOG_FILE_BACKUP_COUNT = int(os.environ.get('LOG_FILE_BACKUP_COUNT', '5'))
+
+if LOG_CONSOLE_FORMAT not in ('plain', 'json'):
+    raise ImproperlyConfigured(
+        f'LOG_CONSOLE_FORMAT must be "plain" or "json", not {LOG_CONSOLE_FORMAT!r}.'
+    )
+
+# Our own packages log at LOG_LEVEL; dependencies only at WARNING and above. The handlers
+# use LOG_LEVEL too, so a stricter level also quiets dependencies.
+LOG_PROJECT_PACKAGES = ['api', 'config', 'routing']
+
+LOG_HANDLERS = {
+    'console': {
+        'class': 'logging.StreamHandler',
+        'formatter': LOG_CONSOLE_FORMAT,
+        'level': LOG_LEVEL,
+    },
+}
+if LOG_FILE_ENABLED:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_HANDLERS['file'] = {
+        'class': 'logging.handlers.RotatingFileHandler',
+        'filename': LOG_DIR / 'app.log',
+        'maxBytes': LOG_FILE_MAX_BYTES,
+        'backupCount': LOG_FILE_BACKUP_COUNT,
+        'encoding': 'utf-8',
+        'formatter': 'json',
+        'level': LOG_LEVEL,
+    }
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'plain': {
+            '()': 'config.logs.PlainFormatter',
+            'project_root': BASE_DIR,
+        },
+        'json': {
+            '()': 'config.logs.JsonFormatter',
+            'project_root': BASE_DIR,
+        },
+    },
+    'filters': {
+        'traceback_only': {
+            '()': 'config.logs.TracebackOnlyFilter',
+        },
+    },
+    'handlers': {
+        **LOG_HANDLERS,
+        'null': {
+            'class': 'logging.NullHandler',
+        },
+    },
+    'root': {
+        'handlers': list(LOG_HANDLERS),
+        'level': 'WARNING',
+    },
+    'loggers': {
+        **{name: {'level': LOG_LEVEL} for name in LOG_PROJECT_PACKAGES},
+        # Replace Django's default handlers, which would print its logs a second time.
+        'django': {
+            'handlers': [],
+            'level': 'WARNING',
+        },
+        # AccessLogMiddleware logs each request with its status, so of Django's request
+        # logs only the 5xx errors with a traceback are kept.
+        'django.request': {
+            'level': 'ERROR',
+            'filters': ['traceback_only'],
+        },
+        # runserver's access lines, replaced by AccessLogMiddleware. The NullHandler stops
+        # Python from printing them anyway through its last-resort handler.
+        'django.server': {
+            'handlers': ['null'],
+            'propagate': False,
+        },
+    },
+}
