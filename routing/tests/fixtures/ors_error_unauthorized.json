@@ -1,0 +1,6 @@
+{
+ "status": 403,
+ "body": {
+  "error": "Access to this API has been disallowed"
+ }
+}

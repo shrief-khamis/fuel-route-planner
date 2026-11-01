@@ -1,0 +1,6 @@
+{
+ "status": 429,
+ "body": {
+  "error": "Rate limit exceeded"
+ }
+}

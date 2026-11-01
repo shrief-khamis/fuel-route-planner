@@ -48,7 +48,7 @@ INSTALLED_APPS = [
     # Third party
     'rest_framework',
     # Local
-    'routes',
+    'api',
 ]
 
 MIDDLEWARE = [
@@ -156,3 +156,12 @@ REST_FRAMEWORK = {
     ],
     'UNAUTHENTICATED_USER': None,
 }
+
+
+# Routing
+
+ROUTING_PROVIDER = os.environ.get('ROUTING_PROVIDER', 'openrouteservice')
+ROUTING_CONNECT_TIMEOUT_SECONDS = float(os.environ.get('ROUTING_CONNECT_TIMEOUT_SECONDS', '5'))
+ROUTING_TIMEOUT_SECONDS = float(os.environ.get('ROUTING_TIMEOUT_SECONDS', '15'))
+ORS_API_KEY = os.environ.get('ORS_API_KEY', '')
+ORS_BASE_URL = os.environ.get('ORS_BASE_URL', 'https://api.heigit.org/openrouteservice')
