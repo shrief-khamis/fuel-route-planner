@@ -2,9 +2,11 @@ import httpx
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
-from routing import RoutingProvider
+from fuel_planner import METRES_PER_MILE, Station
+from routing import LatLon, Polyline, RoutingProvider
 from routing.providers.fake import FakeRoutingProvider
 from routing.providers.openrouteservice import OpenRouteServiceProvider
+from stations.models import FuelStation
 
 
 def get_routing_provider() -> RoutingProvider:
@@ -34,3 +36,36 @@ def get_routing_provider() -> RoutingProvider:
     raise ImproperlyConfigured(
         f"Unknown ROUTING_PROVIDER {name!r}; expected 'openrouteservice' or 'fake'."
     )
+
+
+def stations_near(line: Polyline, margin_miles: float) -> list[Station]:
+    """Load the stations inside the line's bounding box, extended by a margin.
+
+    The box is a cheap first filter on the indexed coordinates; the planner then keeps only
+    the stations within the corridor.
+
+    Args:
+        line: The route line.
+        margin_miles: How far to extend the box on every side.
+
+    Returns:
+        The stations, with the FuelStation primary key as their ID.
+    """
+    south_west, north_east = line.bounding_box(margin_miles * METRES_PER_MILE)
+    rows = FuelStation.objects.filter(
+        lat__range=(south_west.lat, north_east.lat),
+        lon__range=(south_west.lon, north_east.lon),
+    ).values_list('id', 'lat', 'lon', 'retail_price')
+    return [Station(id=pk, location=LatLon(lat, lon), price=float(price)) for pk, lat, lon, price in rows]
+
+
+def station_details(ids: list[int]) -> dict[int, FuelStation]:
+    """Load the full records of the given stations.
+
+    Args:
+        ids: FuelStation primary keys.
+
+    Returns:
+        The stations by primary key.
+    """
+    return FuelStation.objects.in_bulk(ids)

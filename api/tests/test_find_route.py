@@ -5,6 +5,8 @@ from rest_framework import status
 from api.validators import US_MAX_LAT, US_MAX_LON, US_MIN_LAT, US_MIN_LON
 from routing import InvalidRouteRequest, LatLon, Profile, Route, RouteNotFound, RoutingUnavailable
 
+pytestmark = pytest.mark.django_db
+
 URL = reverse('find-route')
 NYC = '40.7128,-74.0060'
 CHICAGO = '41.8781,-87.6298'
@@ -13,11 +15,14 @@ US_MESSAGE = 'Point must be within the contiguous United States.'
 
 def test_valid_request_uses_fake_provider(api_client):
     """A valid request returns 200 with the full response shape."""
-    response = api_client.get(URL, {'start': NYC, 'finish': CHICAGO})
+    response = api_client.get(URL, {'start': NYC, 'finish': CHICAGO, 'max_range_miles': 800})
 
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
-    assert set(data) == {'profile', 'start', 'finish', 'distance_m', 'duration_s', 'points'}
+    assert set(data) == {
+        'profile', 'start', 'finish', 'distance_m', 'duration_s',
+        'total_cost', 'total_gallons', 'total_detour_miles', 'stops', 'points',
+    }
     assert data['profile'] == 'truck'
     assert data['start'] == {'lat': 40.7128, 'lon': -74.006}
     assert data['finish'] == {'lat': 41.8781, 'lon': -87.6298}
@@ -29,11 +34,11 @@ def test_valid_request_uses_fake_provider(api_client):
 
 def test_route_is_passed_through(api_client, stub_provider):
     """The provider's route appears unchanged in the response."""
-    stub_provider(Route(points=[LatLon(40.7, -74.0), LatLon(41.8, -87.6)], distance_m=12.5, duration_s=3.5))
+    stub_provider(Route(points=[LatLon(40.7, -74.0), LatLon(40.8, -74.1)], distance_m=12.5, duration_s=3.5))
 
     data = api_client.get(URL, {'start': NYC, 'finish': CHICAGO}).json()
 
-    assert data['points'] == [[40.7, -74.0], [41.8, -87.6]]
+    assert data['points'] == [[40.7, -74.0], [40.8, -74.1]]
     assert data['distance_m'] == 12.5
     assert data['duration_s'] == 3.5
 
@@ -59,8 +64,9 @@ def test_car_profile(api_client, stub_provider):
     assert stub.calls[0][1] is Profile.CAR
 
 
-def test_whitespace_around_coordinates_is_allowed(api_client):
+def test_whitespace_around_coordinates_is_allowed(api_client, stub_provider):
     """Spaces around the numbers in a coordinate are accepted."""
+    stub_provider()
     response = api_client.get(URL, {'start': ' 40.7128 , -74.0060 ', 'finish': CHICAGO})
     assert response.status_code == status.HTTP_200_OK
 
@@ -101,8 +107,9 @@ def test_outside_contiguous_us(api_client, value):
     assert response.data['start'] == [US_MESSAGE]
 
 
-def test_box_boundary_is_inclusive(api_client):
+def test_box_boundary_is_inclusive(api_client, stub_provider):
     """Points on the edge of the US box are accepted."""
+    stub_provider()
     response = api_client.get(URL, {
         'start': f'{US_MIN_LAT},{US_MIN_LON}',
         'finish': f'{US_MAX_LAT},{US_MAX_LON}',

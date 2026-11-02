@@ -1,10 +1,25 @@
 import math
 
 from rest_framework import serializers
+from rest_framework.settings import api_settings
 
+from fuel_planner import PlanOptions
 from routing import LatLon, Profile, haversine_m
 
-from .validators import MIN_ROUTE_DISTANCE_M, within_contiguous_us
+from .validators import (
+    MAX_CORRIDOR_MILES,
+    MAX_MPG,
+    MAX_RANGE_MILES,
+    MAX_RESERVE_FRACTION,
+    MIN_ROUTE_DISTANCE_M,
+    positive,
+    within_contiguous_us,
+)
+
+DEFAULT_MAX_RANGE_MILES = 500
+DEFAULT_MPG = 10
+DEFAULT_CORRIDOR_MILES = 3
+DEFAULT_MIN_STOP_SAVING = 5
 
 
 class LatLonField(serializers.Field):
@@ -66,6 +81,16 @@ class FindRouteRequestSerializer(serializers.Serializer):
     start = LatLonField(validators=[within_contiguous_us])
     finish = LatLonField(validators=[within_contiguous_us])
     profile = serializers.ChoiceField(choices=[p.value for p in Profile], default=Profile.TRUCK.value)
+    max_range_miles = serializers.FloatField(
+        default=DEFAULT_MAX_RANGE_MILES, max_value=MAX_RANGE_MILES, validators=[positive],
+    )
+    start_fuel_miles = serializers.FloatField(required=False, validators=[positive])
+    reserve_miles = serializers.FloatField(default=0, min_value=0)
+    mpg = serializers.FloatField(default=DEFAULT_MPG, max_value=MAX_MPG, validators=[positive])
+    corridor_miles = serializers.FloatField(
+        default=DEFAULT_CORRIDOR_MILES, max_value=MAX_CORRIDOR_MILES, validators=[positive],
+    )
+    min_stop_saving = serializers.FloatField(default=DEFAULT_MIN_STOP_SAVING, min_value=0)
 
     def validate_profile(self, value):
         """Convert the profile choice to a Profile.
@@ -79,21 +104,58 @@ class FindRouteRequestSerializer(serializers.Serializer):
         return Profile(value)
 
     def validate(self, attrs):
-        """Check that start and finish are far enough apart.
+        """Check the rules that involve more than one field.
 
-        DRF runs this only after every field is valid on its own.
+        start and finish must be far enough apart, the reserve at most half the range, and
+        the start fuel no more than the range and more than the reserve. The start fuel
+        defaults to a full tank. DRF runs this only after every field is valid on its own.
 
         Args:
             attrs: The validated fields.
 
         Returns:
-            The same fields, unchanged.
+            The fields, with start_fuel_miles set.
 
         Raises:
-            ValidationError: start and finish are less than MIN_ROUTE_DISTANCE_M apart.
+            ValidationError: One or more rules are broken. The distance error is listed
+                under non_field_errors, the others under their field.
         """
+        errors = {}
         if haversine_m(attrs['start'], attrs['finish']) < MIN_ROUTE_DISTANCE_M:
-            raise serializers.ValidationError(
+            errors[api_settings.NON_FIELD_ERRORS_KEY] = [
                 f'start and finish must be at least {MIN_ROUTE_DISTANCE_M / 1000:g} km apart.'
-            )
+            ]
+
+        max_range = attrs['max_range_miles']
+        reserve = attrs['reserve_miles']
+        start_fuel = attrs.setdefault('start_fuel_miles', max_range)
+        if reserve > max_range * MAX_RESERVE_FRACTION:
+            errors['reserve_miles'] = [
+                f'Ensure this value is at most half of max_range_miles ({max_range * MAX_RESERVE_FRACTION:g}).'
+            ]
+        if start_fuel > max_range:
+            errors['start_fuel_miles'] = [
+                f'Ensure this value is less than or equal to max_range_miles ({max_range:g}).'
+            ]
+        elif start_fuel <= reserve:
+            errors['start_fuel_miles'] = [f'Ensure this value is greater than reserve_miles ({reserve:g}).']
+
+        if errors:
+            raise serializers.ValidationError(errors)
         return attrs
+
+    def plan_options(self) -> PlanOptions:
+        """Return the fuel settings from the validated data.
+
+        Returns:
+            The settings for the fuel planner.
+        """
+        data = self.validated_data
+        return PlanOptions(
+            max_range_miles=data['max_range_miles'],
+            start_fuel_miles=data['start_fuel_miles'],
+            reserve_miles=data['reserve_miles'],
+            mpg=data['mpg'],
+            corridor_miles=data['corridor_miles'],
+            min_stop_saving=data['min_stop_saving'],
+        )

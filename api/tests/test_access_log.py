@@ -1,5 +1,6 @@
 import logging
 
+import pytest
 from django.urls import reverse
 
 from routing import RoutingUnavailable
@@ -7,6 +8,7 @@ from routing import RoutingUnavailable
 URL = reverse('find-route')
 NYC = '40.7128,-74.0060'
 CHICAGO = '41.8781,-87.6298'
+PHILADELPHIA = '39.9526,-75.1652'
 
 
 def access_records(caplog):
@@ -14,17 +16,18 @@ def access_records(caplog):
     return [r for r in caplog.records if r.name == 'api.middleware']
 
 
+@pytest.mark.django_db
 def test_request_is_logged(api_client, caplog):
     """A request logs its method and path, with the status, duration and query."""
     with caplog.at_level(logging.INFO, logger='api.middleware'):
-        api_client.get(URL, {'start': NYC, 'finish': CHICAGO})
+        api_client.get(URL, {'start': NYC, 'finish': PHILADELPHIA})
 
     [record] = access_records(caplog)
     assert record.levelno == logging.INFO
     assert record.getMessage() == f'GET {URL}'
     assert record.status == 200
     assert record.duration_ms >= 0
-    assert record.query == 'start=40.7128%2C-74.0060&finish=41.8781%2C-87.6298'
+    assert record.query == 'start=40.7128%2C-74.0060&finish=39.9526%2C-75.1652'
 
 
 def test_client_error_is_a_warning(api_client, caplog):

@@ -1,8 +1,8 @@
 # Fuel Route Planner
 
 A Django REST API that returns the driving route between two points in the contiguous
-United States, using [openrouteservice](https://openrouteservice.org) (ORS) for routing.
-It is the base for a planner that will pick fuel stops along that route.
+United States, using [openrouteservice](https://openrouteservice.org) (ORS) for routing,
+and the cheapest fuel stops along it.
 
 ## Quickstart
 
@@ -37,7 +37,9 @@ python manage.py runserver
 ```
 
 No key yet? Set `ROUTING_PROVIDER=fake` in `.env` to get straight-line routes, fully
-offline. `.env.example` documents every other setting (timeouts, logging).
+offline. Straight lines rarely pass near a station, so trips longer than the tank range
+usually return 422 `no_feasible_fuel_plan` in this mode. `.env.example` documents every
+other setting (timeouts, logging).
 
 ## API
 
@@ -48,27 +50,57 @@ offline. `.env.example` documents every other setting (timeouts, logging).
 | `start` | yes | `lat,lon` in decimal degrees, e.g. `32.7767,-96.7970` | Inside the contiguous US: latitude 24.396308 to 49.384358, longitude -124.848974 to -66.885444 (inclusive) |
 | `finish` | yes | Same as `start` | Same as `start`, and at least 1 km from it in a straight line |
 | `profile` | no | `truck` or `car` | Default `truck` |
+| `max_range_miles` | no | Number | Miles on a full tank. Over 0, up to 3,000. Default 500 |
+| `start_fuel_miles` | no | Number | Miles the fuel at the start lasts. Over `reserve_miles`, up to `max_range_miles`. Default `max_range_miles` (a full tank) |
+| `reserve_miles` | no | Number | Fuel to keep in the tank at all times, in miles. 0 to half of `max_range_miles`. Default 0 |
+| `mpg` | no | Number | Miles per gallon. Over 0, up to 150. Default 10 |
+| `corridor_miles` | no | Number | How far off the route a station may be. Over 0, up to 15. Default 3 |
+| `min_stop_saving` | no | Number | Dollars a stop must save to be worth making. 0 or more. Default 5 |
 
-Example request, a 20 km truck route across Dallas:
+Example request, a 782-mile truck trip from Dallas to Denver with the default settings:
 
 ```bash
-curl "http://localhost:8000/api/find-route/?start=32.7767,-96.7970&finish=32.8998,-96.7300"
+curl "http://localhost:8000/api/find-route/?start=32.7767,-96.7970&finish=39.7392,-104.9903"
 ```
 
-Response (trimmed; the full route has 274 points):
+Response (trimmed; the full route has 5,449 points):
 
 ```json
 {
   "profile": "truck",
   "start": {"lat": 32.7767, "lon": -96.797},
-  "finish": {"lat": 32.8998, "lon": -96.73},
-  "distance_m": 20355.0,
-  "duration_s": 1622.9,
+  "finish": {"lat": 39.7392, "lon": -104.9903},
+  "distance_m": 1259214.4,
+  "duration_s": 68176.9,
+  "total_cost": 81.53,
+  "total_gallons": 28.65,
+  "total_detour_miles": 4.07,
+  "stops": [
+    {
+      "station": {
+        "opis_id": 72816,
+        "name": "QUIKTRIP #7914",
+        "address": "I-27 EXIT 117",
+        "city": "Amarillo",
+        "state": "TX",
+        "lat": 35.25345185185185,
+        "lon": -101.86565555555555,
+        "location_precision": "city"
+      },
+      "price_per_gallon": 2.8457,
+      "distance_from_start_miles": 364.7,
+      "offset_miles": 2.03,
+      "fuel_on_arrival_miles": 133.2,
+      "fuel_added_miles": 286.5,
+      "gallons": 28.65,
+      "cost": 81.53
+    }
+  ],
   "points": [
     [32.775944, -96.796753],
     [32.776079, -96.796167],
     ...
-    [32.899751, -96.729814]
+    [39.738466, -104.990294]
   ]
 }
 ```
@@ -77,21 +109,38 @@ Response (trimmed; the full route has 274 points):
 `[lat, lon]` pairs, from start to finish. The first and last points are where the route
 meets the road, so they can differ slightly from `start` and `finish`.
 
+`stops` lists the fuel stops in travel order, and is empty when the start fuel reaches
+the finish. For each stop:
+
+- `distance_from_start_miles` is where the route passes the station, and `offset_miles`
+  the straight-line distance from there to the station. Reaching the station and getting
+  back to the route uses fuel for twice the offset.
+- `fuel_on_arrival_miles` is the range left in the tank on arrival, reserve included.
+- `fuel_added_miles` and `gallons` are what to buy, and `cost` what it costs, rounded to
+  cents.
+
+`total_cost` adds up the stop costs, `total_gallons` the fuel bought, and
+`total_detour_miles` the miles driven off the route. Fuel already in the tank at the
+start costs nothing.
+
 ### Errors
 
 | Status | `code` | Triggered by |
 |---|---|---|
-| 400 | — | A missing or malformed coordinate, latitude or longitude out of range, a point outside the contiguous US, an unknown `profile`, or `start` and `finish` less than 1 km apart |
+| 400 | — | A missing or malformed coordinate, latitude or longitude out of range, a point outside the contiguous US, an unknown `profile`, `start` and `finish` less than 1 km apart, or a fuel setting outside its allowed values |
 | 422 | `route_not_found` | No road route connects the points, a point is more than 5 km from a road (e.g. in water), or the points are in different countries |
 | 422 | `invalid_route_request` | The route is over the ORS limit of 6,000 km |
+| 422 | `no_feasible_fuel_plan` | No choice of stations reaches the finish: two stations within the corridor, or the start and the first station, are further apart than the usable range (`max_range_miles` minus `reserve_miles`) |
 | 503 | `routing_unavailable` | ORS is unreachable, slow (over 15 s), rate-limited or failing, or the API key is missing or rejected |
 
 400 responses use Django REST Framework's standard format, listing errors per field.
-The 1 km check is not tied to one field, so its error goes under `non_field_errors`:
+The 1 km check is not tied to one field, so its error goes under `non_field_errors`.
+Errors from comparing fuel settings go under the field that breaks the rule:
 
 ```json
 {"start": ["Point must be within the contiguous United States."], "finish": ["This field is required."]}
 {"non_field_errors": ["start and finish must be at least 1 km apart."]}
+{"reserve_miles": ["Ensure this value is at most half of max_range_miles (250)."]}
 ```
 
 422 and 503 responses have a generic message and a code. Details about the provider are
@@ -138,6 +187,27 @@ duplicates, and saves 6,626 stations: 3,145 at an interstate exit and 3,481 at t
 The data exploration behind these rules, and the alternatives that were rejected, are in
 [`notebooks/station_data.ipynb`](notebooks/station_data.ipynb).
 
+## How fuel stops are chosen
+
+1. **Stations near the route.** Stations inside the route's bounding box are loaded from
+   the database. Each is placed at the nearest point on the route line, and kept if its
+   straight-line offset from there is at most `corridor_miles`.
+2. **Detours cost fuel.** A stop drives to the station and back, so it uses twice its
+   offset on top of the route. A cheap station far off the route can lose to a slightly
+   dearer one at the exit.
+3. **The cheapest plan, exactly.** For a fixed set of stops, some cheapest plan either
+   fills the tank at each stop or buys just enough to reach the next one (Khuller,
+   Malekian and Mestre, "To fill or not to fill: the gas station problem", 2011). A dynamic
+   program over the stations uses this to find the cheapest plan, not an approximation.
+   In practice it fills up at cheap stations and buys just enough at expensive ones to
+   reach the next cheap one. The last stop buys only what reaches the finish.
+4. **Stops must be worth it.** Each stop counts `min_stop_saving` extra in the search,
+   so a stop is made only if it saves more than that. Stops the trip can't do without are
+   always made. The extra amount is left out of the reported cost.
+
+Planning takes tens of milliseconds for a coast-to-coast route at the default 3-mile
+corridor, which holds a few hundred stations.
+
 ## Assumptions and decisions
 
 - **GET, not POST.** Finding a route only reads data and is safe to repeat, which is what
@@ -153,6 +223,19 @@ The data exploration behind these rules, and the alternatives that were rejected
   hand-picked points. The radius stays finite so that points in open water still fail.
 - **Start and finish must be at least 1 km apart.** Nearly identical points produce an
   empty or meaningless route.
+- **Miles for every fuel setting.** Range, start fuel, reserve, corridor and the stop
+  distances are in miles, to match the miles per gallon. The route itself keeps
+  `distance_m` in metres.
+- **The reserve is never used.** The fuel level stays at or above `reserve_miles`
+  everywhere, including on arrival at stations and at the finish, so the usable tank is
+  `max_range_miles - reserve_miles`.
+- **Start fuel is free.** Only the fuel bought along the way counts towards the cost.
+- **One fuel efficiency for every vehicle.** `mpg` is a plain input, the same for both
+  profiles. It changes the gallons and the cost, but not which stations are chosen.
+- **Fuel can be bought in any amount.** Each stop buys exactly what the plan needs.
+- **Planning has its own package.** `fuel_planner/` takes plain route and station data
+  and has no Django imports, like `routing/`. The `api` app loads the stations and
+  wires them together.
 - **Routing sits behind its own interface.** `routing/` has its own types and errors, and
   ORS is one adapter behind it, so the provider can be replaced without changing the API.
 
@@ -164,8 +247,8 @@ The data exploration behind these rules, and the alternatives that were rejected
 - **The US check is a bounding box.** It also accepts parts of southern Canada, northern
   Mexico and nearby water. Points in water fail with 422, but a trip with both points in
   Canada, such as Toronto to Ottawa, can get a Canadian route.
-- **Two points only.** There are no stops in between, though `routing/` already accepts
-  any number of waypoints.
+- **Two points only.** A trip can't pass through waypoints of its own choosing, though
+  `routing/` already accepts any number of them.
 - **No truck restrictions.** The truck profile ignores vehicle height, weight and hazardous
   goods.
 - **Large responses.** Long routes return thousands of points, and the line is not
@@ -173,6 +256,13 @@ The data exploration behind these rules, and the alternatives that were rejected
 - **ORS quotas.** A free ORS key has daily and per-minute request limits. Requests over
   them return 503.
 - **No authentication, rate limiting or caching** on this API.
+- **Stops are not on the route line.** The route is not recalculated through the chosen
+  stations, which would cost another ORS request. Detours are estimated from the
+  straight-line offset, which is a little shorter than the drive on the road.
+- **No time cost.** A stop's only cost is its detour fuel and `min_stop_saving`. Driving
+  time and opening hours are ignored, and every station is assumed to have fuel.
+- **One price per station.** Stations with several prices in the source data use their
+  average.
 - **Station locations are approximate.** Exit-located stations are within about a
   kilometre of the interchange. City-located stations can be several kilometres off, and
   in large cities such as Phoenix or El Paso, tens of kilometres.
@@ -200,6 +290,8 @@ The tests make no network calls and need no API key:
   through an `httpx` mock transport. The files marked `_synthetic` (rate limit and server
   error) were written by hand in the same format, since those errors can't be triggered
   safely.
+- **Fuel planner tests** use made-up stations along a line. The search is checked against
+  a brute-force search over every possible plan, on small random trips.
 - **Station ingestion tests** build small data files in a temporary folder, one rule per
   test, and never read the real data files.
 
@@ -224,16 +316,21 @@ api/                     HTTP layer
   views.py               GET /api/find-route/ and error responses
   serializers.py         Query parameter parsing and validation
   validators.py          US bounding box and minimum distance
-  services.py            Builds the routing provider from settings
+  services.py            Builds the routing provider, loads stations near a route
   middleware.py          Access log, one line per request
 routing/                 Provider-independent routing, no Django imports
   types.py               LatLon, Profile, Route
   errors.py              RouteNotFound, InvalidRouteRequest, RoutingUnavailable
-  geo.py                 Haversine distance
+  geo.py                 Haversine distance, Polyline (nearest point on a route)
   providers/
     openrouteservice.py  ORS adapter
     fake.py              Offline straight-line provider
   tests/fixtures/        Recorded ORS responses
+fuel_planner/            Fuel stop planning, no Django imports
+  types.py               PlanOptions, Station, FuelStop, FuelPlan
+  corridor.py            Places the stations near the route on it
+  optimizer.py           The cheapest stops and purchases
+  planner.py             plan_fuel_stops: corridor, optimizer, gallons and costs
 stations/                Fuel stations
   models.py              FuelStation
   ingest.py              Cleaning, merging and locating stations, no Django imports

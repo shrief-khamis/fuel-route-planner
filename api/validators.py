@@ -25,3 +25,22 @@ def within_contiguous_us(value: LatLon) -> None:
     """
     if not (US_MIN_LAT <= value.lat <= US_MAX_LAT and US_MIN_LON <= value.lon <= US_MAX_LON):
         raise serializers.ValidationError('Point must be within the contiguous United States.')
+
+# Upper limits for the fuel inputs, all in miles except mpg.
+MAX_RANGE_MILES = 3000
+MAX_MPG = 150
+MAX_CORRIDOR_MILES = 15
+MAX_RESERVE_FRACTION = 0.5
+
+
+def positive(value: float) -> None:
+    """Check that a number is greater than zero.
+
+    Args:
+        value: The number to check.
+
+    Raises:
+        ValidationError: The number is zero or negative.
+    """
+    if value <= 0:
+        raise serializers.ValidationError('Ensure this value is greater than 0.')
