@@ -23,6 +23,13 @@ Get a free ORS API key at <https://account.heigit.org/signup> and set it in `.en
 ORS_API_KEY=your-key-here
 ```
 
+Create the database and load the fuel stations (takes about a second, no network):
+
+```bash
+python manage.py migrate
+python manage.py ingest_fuel_stations
+```
+
 Then start the server:
 
 ```bash
@@ -94,6 +101,43 @@ only written to the server logs.
 {"detail": "No drivable route was found between start and finish.", "code": "route_not_found"}
 ```
 
+## Fuel station data
+
+`python manage.py ingest_fuel_stations` loads the stations into the `FuelStation` model
+from three files in the project root. Each run replaces all stations in one transaction.
+Options `--fuel-csv`, `--postal-codes` and `--exits` point it at other copies.
+
+| File | Contents |
+|---|---|
+| `fuel-prices-for-be-assessment.csv` | Truck stops with their address, city, state and retail price |
+| `geonames-us-postal-codes.txt` | US ZIP codes with their place name and coordinates (GeoNames) |
+| `osm-interstate-exits.csv` | Interstate exit coordinates by state, interstate and exit number (OpenStreetMap) |
+
+The fuel CSV has no coordinates, so each station is located from its address and city:
+
+1. **Cleaning.** Fields are trimmed and repeated spaces collapsed. Rows with a missing or
+   invalid value are skipped and logged with their line number. Rows outside the
+   contiguous US (the file also lists Canadian stations) are dropped, and so are duplicate
+   rows, ignoring the station name, which only varies in spelling.
+2. **One station per OPIS ID.** Some IDs have several rows with different prices and no
+   date to say which is current. The station's `retail_price` is their average;
+   `price_min`, `price_max` and `price_count` keep the spread.
+3. **Location at the exit.** Most addresses name an interstate exit, e.g.
+   `I-44, EXIT 283 & US-69`. If that exit is in the OSM file, the station is placed there
+   (`location_precision = "exit"`). One exit has a point per ramp, so the points of the
+   interchange nearest the city are averaged.
+4. **Location at the city, otherwise.** The city's point is the average of its GeoNames
+   ZIP codes (`location_precision = "city"`). City names are matched across spellings
+   such as "Saint" and "St.". An exit more than 40 km from the city is treated as an error
+   in the source data, logged, and the city is used instead. Stations whose city is not
+   in GeoNames are skipped and logged.
+
+With the current files, the command drops 620 rows outside the contiguous US and 128
+duplicates, and saves 6,626 stations: 3,145 at an interstate exit and 3,481 at their city.
+
+The data exploration behind these rules, and the alternatives that were rejected, are in
+[`notebooks/station_data.ipynb`](notebooks/station_data.ipynb).
+
 ## Assumptions and decisions
 
 - **GET, not POST.** Finding a route only reads data and is safe to repeat, which is what
@@ -129,8 +173,20 @@ only written to the server logs.
 - **ORS quotas.** A free ORS key has daily and per-minute request limits. Requests over
   them return 503.
 - **No authentication, rate limiting or caching** on this API.
+- **Station locations are approximate.** Exit-located stations are within about a
+  kilometre of the interchange. City-located stations can be several kilometres off, and
+  in large cities such as Phoenix or El Paso, tens of kilometres.
 
-## Testing
+## Development
+
+`requirements.txt` has only what the API needs. `requirements-dev.txt` adds the test and
+notebook tools:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+### Testing
 
 ```bash
 pytest
@@ -144,8 +200,22 @@ The tests make no network calls and need no API key:
   through an `httpx` mock transport. The files marked `_synthetic` (rate limit and server
   error) were written by hand in the same format, since those errors can't be triggered
   safely.
+- **Station ingestion tests** build small data files in a temporary folder, one rule per
+  test, and never read the real data files.
 
 pytest uses `config/settings_test.py`, which turns file logging off.
+
+### Notebook
+
+[`notebooks/station_data.ipynb`](notebooks/station_data.ipynb) explores the fuel data and
+explains the ingestion rules, including the data sources and geocoding that were
+considered and rejected. It is saved with its outputs, so it can be read on GitHub
+without running it. It imports the rules from `stations/ingest.py`, so after changing
+them, regenerate the outputs with a clean run from top to bottom:
+
+```bash
+jupyter execute --inplace notebooks/station_data.ipynb
+```
 
 ## Project layout
 
@@ -164,7 +234,17 @@ routing/                 Provider-independent routing, no Django imports
     openrouteservice.py  ORS adapter
     fake.py              Offline straight-line provider
   tests/fixtures/        Recorded ORS responses
+stations/                Fuel stations
+  models.py              FuelStation
+  ingest.py              Cleaning, merging and locating stations, no Django imports
+  management/commands/
+    ingest_fuel_stations.py  Loads the stations into the database
 config/                  Django project: settings, URLs, logging
+notebooks/
+  station_data.ipynb     Data exploration behind the station ingestion
+fuel-prices-for-be-assessment.csv  Source fuel prices
+geonames-us-postal-codes.txt       ZIP code coordinates
+osm-interstate-exits.csv           Interstate exit coordinates
 ```
 
 ## Attribution
@@ -172,3 +252,15 @@ config/                  Django project: settings, URLs, logging
 Routing by [openrouteservice](https://openrouteservice.org) (HeiGIT).
 Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors,
 available under the Open Database License (ODbL).
+
+Data files in this repo:
+
+- **`geonames-us-postal-codes.txt`** is the US postal code file from
+  [GeoNames](https://www.geonames.org), downloaded from
+  <https://download.geonames.org/export/zip/> on 2026-11-02 and kept unmodified. It is
+  licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- **`osm-interstate-exits.csv`** contains data © [OpenStreetMap](https://www.openstreetmap.org/copyright)
+  contributors. It lists the interstate exits (`highway=motorway_junction` nodes) of the
+  48 contiguous states, pulled from the Overpass API on 2026-11-02. It is licensed under
+  the [Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/), and so is
+  any database built from it.

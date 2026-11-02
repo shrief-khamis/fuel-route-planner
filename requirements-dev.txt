@@ -1,0 +1,11 @@
+-r requirements.txt
+
+# Tests
+pytest==9.2.0
+pytest-django==4.14.0
+
+# Notebook (notebooks/station_data.ipynb)
+ipykernel==7.4.0
+matplotlib==3.11.2
+nbclient==0.11.0
+pandas==3.1.0

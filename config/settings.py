@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'rest_framework',
     # Local
     'api',
+    'stations',
 ]
 
 MIDDLEWARE = [
@@ -186,7 +187,7 @@ if LOG_CONSOLE_FORMAT not in ('plain', 'json'):
 
 # Our own packages log at LOG_LEVEL; dependencies only at WARNING and above. The handlers
 # use LOG_LEVEL too, so a stricter level also quiets dependencies.
-LOG_PROJECT_PACKAGES = ['api', 'config', 'routing']
+LOG_PROJECT_PACKAGES = ['api', 'config', 'routing', 'stations']
 
 LOG_HANDLERS = {
     'console': {
