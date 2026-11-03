@@ -63,12 +63,25 @@ def test_no_stops_needed():
     assert plan.stops == []
     assert plan.total_cost == 0
     assert plan.total_gallons == 0
+    assert plan.corridor_stations == 0
+
+
+def test_plan_counts_the_stations_in_the_corridor():
+    """corridor_stations counts the candidates, not the stations passed in."""
+    stations = [
+        Station(1, LatLon(40.0, -99.5), 3.0),
+        Station(2, LatLon(40.0, -98.5), 3.0),
+        Station(3, LatLon(40.0 + 5 * MILE_DEG, -99.0), 3.0),
+    ]
+    plan = plan_fuel_stops(LINE, stations, options(max_range_miles=120, start_fuel_miles=120))
+    assert plan.corridor_stations == 2
 
 
 def test_stations_outside_corridor_are_ignored():
     """A station 5 miles off a 3-mile corridor can't save the trip."""
-    with pytest.raises(NoFeasiblePlan):
+    with pytest.raises(NoFeasiblePlan) as exc_info:
         plan_fuel_stops(LINE, [Station(1, LatLon(40.0 + 5 * MILE_DEG, -99.0), 3.0)], options())
+    assert exc_info.value.corridor_stations == 0
 
 
 def test_total_cost_adds_up_the_rounded_stop_costs():

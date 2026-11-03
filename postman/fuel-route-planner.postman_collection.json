@@ -1,0 +1,668 @@
+{
+  "info": {
+    "name": "Fuel Route Planner",
+    "description": "Requests for `GET /api/find-route/`. Set the `baseUrl` collection variable to where the server runs (default `http://localhost:8000`). Each request has tests that check the response, and a saved example from a real run against openrouteservice, with the route `points` trimmed to four.\n\nThe optional fuel settings are listed on each request, disabled. Enable one to override its default; the tests read the settings from the request.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    }
+  ],
+  "item": [
+    {
+      "name": "Long route: New York to Los Angeles",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const METRES_PER_MILE = 1609.344;",
+              "const query = pm.request.url.query.toObject(true);",
+              "const maxRange = Number(query.max_range_miles ?? 500);",
+              "const startFuel = Number(query.start_fuel_miles ?? maxRange);",
+              "const reserve = Number(query.reserve_miles ?? 0);",
+              "const mpg = Number(query.mpg ?? 10);",
+              "const body = pm.response.json();",
+              "const routeMiles = body.distance_m / METRES_PER_MILE;",
+              "",
+              "// Distances in the response are rounded to 0.1 mi and offsets to 0.01 mi.",
+              "const MILES_TOLERANCE = 0.5;",
+              "",
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "",
+              "pm.test('The route is longer than the usable start fuel, so it needs stops', () => {",
+              "    pm.expect(routeMiles).to.be.above(startFuel - reserve);",
+              "    pm.expect(body.stops).to.be.an('array').that.is.not.empty;",
+              "});",
+              "",
+              "pm.test('Stops are in travel order', () => {",
+              "    const along = body.stops.map(s => s.distance_from_start_miles);",
+              "    pm.expect(along).to.eql([...along].sort((a, b) => a - b));",
+              "});",
+              "",
+              "// Walk the trip from start to finish, tracking the fuel in the tank.",
+              "console.log(`${body.start.lat},${body.start.lon} -> ${body.finish.lat},${body.finish.lon}: ` +",
+              "    `${routeMiles.toFixed(1)} mi, ${body.stops.length} stops, start fuel ${startFuel} mi`);",
+              "let fuel = startFuel;",
+              "let position = 0;",
+              "body.stops.forEach((stop, i) => {",
+              "    const s = stop.station;",
+              "    const leg = stop.distance_from_start_miles - position;",
+              "    fuel -= leg + stop.offset_miles;",
+              "    console.log(`Stop ${i + 1}: ${s.name}, ${s.address}, ${s.city} ${s.state} at mile ` +",
+              "        `${stop.distance_from_start_miles} (${stop.offset_miles} mi off route). ` +",
+              "        `Arrive with ${stop.fuel_on_arrival_miles} mi, buy ${stop.gallons} gal ` +",
+              "        `(${stop.fuel_added_miles} mi) at $${stop.price_per_gallon}/gal = $${stop.cost}`);",
+              "",
+              "    pm.test(`Stop ${i + 1} (${s.city}, ${s.state}): arrival fuel matches the distance driven`, () => {",
+              "        pm.expect(stop.fuel_on_arrival_miles).to.be.closeTo(fuel, MILES_TOLERANCE);",
+              "        pm.expect(stop.fuel_on_arrival_miles).to.be.at.least(reserve);",
+              "    });",
+              "    pm.test(`Stop ${i + 1} (${s.city}, ${s.state}): gallons and cost add up`, () => {",
+              "        pm.expect(stop.gallons).to.be.closeTo(stop.fuel_added_miles / mpg, 0.01);",
+              "        pm.expect(stop.cost).to.be.closeTo(stop.gallons * stop.price_per_gallon, 0.05);",
+              "    });",
+              "",
+              "    fuel = stop.fuel_on_arrival_miles + stop.fuel_added_miles;",
+              "    pm.test(`Stop ${i + 1} (${s.city}, ${s.state}): the tank is not overfilled`, () => {",
+              "        pm.expect(fuel).to.be.at.most(maxRange + MILES_TOLERANCE);",
+              "    });",
+              "    fuel -= stop.offset_miles;",
+              "    position = stop.distance_from_start_miles;",
+              "});",
+              "fuel -= routeMiles - position;",
+              "console.log(`Finish: arrive with ${fuel.toFixed(1)} mi of fuel. ` +",
+              "    `Total ${body.total_gallons} gal, $${body.total_cost}, ${body.total_detour_miles} mi of detours`);",
+              "",
+              "pm.test('The last stop buys just enough to reach the finish above the reserve', () => {",
+              "    pm.expect(fuel).to.be.closeTo(reserve, 1);",
+              "});",
+              "",
+              "pm.test('Totals are the sums of the stops', () => {",
+              "    const sum = key => body.stops.reduce((total, s) => total + s[key], 0);",
+              "    const n = body.stops.length;",
+              "    pm.expect(body.total_cost).to.be.closeTo(sum('cost'), 0.01);",
+              "    pm.expect(body.total_gallons).to.be.closeTo(sum('gallons'), 0.01 * n);",
+              "    pm.expect(body.total_detour_miles).to.be.closeTo(2 * sum('offset_miles'), 0.01 * n);",
+              "});",
+              "",
+              "// Open the Visualize tab of the response to see the stops as a table.",
+              "pm.visualizer.set(`",
+              "<style>",
+              "  body { font-family: sans-serif; font-size: 13px; }",
+              "  table { border-collapse: collapse; }",
+              "  th, td { padding: 4px 8px; border-bottom: 1px solid #ddd; text-align: right; }",
+              "  th:nth-child(2), td:nth-child(2) { text-align: left; }",
+              "  tfoot td { font-weight: bold; }",
+              "</style>",
+              "<p>{{routeMiles}} mi, {{stops.length}} stops</p>",
+              "<table>",
+              "  <thead><tr><th>#</th><th>Station</th><th>Mile</th><th>Arrive with (mi)</th>",
+              "    <th>Gallons</th><th>$/gal</th><th>Cost</th></tr></thead>",
+              "  <tbody>",
+              "  {{#each stops}}",
+              "    <tr><td>{{n}}</td><td>{{name}}<br><small>{{where}}</small></td><td>{{mile}}</td>",
+              "      <td>{{arrival}}</td><td>{{gallons}}</td><td>{{price}}</td><td>\\${{cost}}</td></tr>",
+              "  {{/each}}",
+              "  </tbody>",
+              "  <tfoot><tr><td></td><td>Total</td><td></td><td></td><td>{{totalGallons}}</td>",
+              "    <td></td><td>\\${{totalCost}}</td></tr></tfoot>",
+              "</table>`, {",
+              "    routeMiles: routeMiles.toFixed(1),",
+              "    totalGallons: body.total_gallons,",
+              "    totalCost: body.total_cost.toFixed(2),",
+              "    stops: body.stops.map((stop, i) => ({",
+              "        n: i + 1,",
+              "        name: stop.station.name,",
+              "        where: `${stop.station.address}, ${stop.station.city}, ${stop.station.state}`,",
+              "        mile: stop.distance_from_start_miles,",
+              "        arrival: stop.fuel_on_arrival_miles,",
+              "        gallons: stop.gallons,",
+              "        price: stop.price_per_gallon,",
+              "        cost: stop.cost.toFixed(2),",
+              "    })),",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/find-route/?start=40.7128,-74.0060&finish=34.0522,-118.2437",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "find-route",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "40.7128,-74.0060",
+              "description": "`lat,lon` in the contiguous US"
+            },
+            {
+              "key": "finish",
+              "value": "34.0522,-118.2437",
+              "description": "`lat,lon` in the contiguous US, at least 1 km from start"
+            },
+            {
+              "key": "profile",
+              "value": "truck",
+              "description": "`truck` or `car`. Default `truck`",
+              "disabled": true
+            },
+            {
+              "key": "max_range_miles",
+              "value": "500",
+              "description": "Miles on a full tank. Default 500",
+              "disabled": true
+            },
+            {
+              "key": "start_fuel_miles",
+              "value": "500",
+              "description": "Miles the starting fuel lasts. Default a full tank",
+              "disabled": true
+            },
+            {
+              "key": "reserve_miles",
+              "value": "0",
+              "description": "Fuel always kept in the tank, in miles. Default 0",
+              "disabled": true
+            },
+            {
+              "key": "mpg",
+              "value": "10",
+              "description": "Miles per gallon. Default 10",
+              "disabled": true
+            },
+            {
+              "key": "corridor_miles",
+              "value": "3",
+              "description": "How far off the route a station may be. Default 3",
+              "disabled": true
+            },
+            {
+              "key": "min_stop_saving",
+              "value": "5",
+              "description": "Dollars a stop must save to be worth making. Default 5",
+              "disabled": true
+            }
+          ]
+        },
+        "description": "A coast-to-coast truck trip, about 2,794 mi, with the default 500-mile tank. It needs several fuel stops.\n\nThe tests walk the trip from start to finish. At each stop they check that the fuel on arrival matches the miles driven since the last one, that gallons = miles of fuel added / mpg and cost = gallons x price, and that the tank is never overfilled. They also check that the last stop buys just enough to reach the finish and that the totals add up.\n\nThe Console prints the walk-through, one line per stop, and the response's **Visualize** tab shows the stops as a table."
+      },
+      "response": [
+        {
+          "name": "6 stops, $710.59",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/find-route/?start=40.7128,-74.0060&finish=34.0522,-118.2437",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "find-route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "40.7128,-74.0060",
+                  "description": "`lat,lon` in the contiguous US"
+                },
+                {
+                  "key": "finish",
+                  "value": "34.0522,-118.2437",
+                  "description": "`lat,lon` in the contiguous US, at least 1 km from start"
+                },
+                {
+                  "key": "profile",
+                  "value": "truck",
+                  "description": "`truck` or `car`. Default `truck`",
+                  "disabled": true
+                },
+                {
+                  "key": "max_range_miles",
+                  "value": "500",
+                  "description": "Miles on a full tank. Default 500",
+                  "disabled": true
+                },
+                {
+                  "key": "start_fuel_miles",
+                  "value": "500",
+                  "description": "Miles the starting fuel lasts. Default a full tank",
+                  "disabled": true
+                },
+                {
+                  "key": "reserve_miles",
+                  "value": "0",
+                  "description": "Fuel always kept in the tank, in miles. Default 0",
+                  "disabled": true
+                },
+                {
+                  "key": "mpg",
+                  "value": "10",
+                  "description": "Miles per gallon. Default 10",
+                  "disabled": true
+                },
+                {
+                  "key": "corridor_miles",
+                  "value": "3",
+                  "description": "How far off the route a station may be. Default 3",
+                  "disabled": true
+                },
+                {
+                  "key": "min_stop_saving",
+                  "value": "5",
+                  "description": "Dollars a stop must save to be worth making. Default 5",
+                  "disabled": true
+                }
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"profile\": \"truck\",\n  \"start\": {\n    \"lat\": 40.7128,\n    \"lon\": -74.006\n  },\n  \"finish\": {\n    \"lat\": 34.0522,\n    \"lon\": -118.2437\n  },\n  \"distance_m\": 4495995.9,\n  \"duration_s\": 232749.4,\n  \"total_cost\": 710.59,\n  \"total_gallons\": 229.51,\n  \"total_detour_miles\": 1.41,\n  \"stops\": [\n    {\n      \"station\": {\n        \"opis_id\": 72445,\n        \"name\": \"SHEETZ #639\",\n        \"address\": \"I-80 Exit 223\",\n        \"city\": \"Youngstown\",\n        \"state\": \"OH\",\n        \"lat\": 41.1237725,\n        \"lon\": -80.7698795,\n        \"location_precision\": \"exit\"\n      },\n      \"price_per_gallon\": 3.059,\n      \"distance_from_start_miles\": 399.6,\n      \"offset_miles\": 0.01,\n      \"fuel_on_arrival_miles\": 100.4,\n      \"fuel_added_miles\": 355.6,\n      \"gallons\": 35.56,\n      \"cost\": 108.76\n    },\n    {\n      \"station\": {\n        \"opis_id\": 70744,\n        \"name\": \"CASEYS #3686\",\n        \"address\": \"I-80 EXIT 81\",\n        \"city\": \"Utica\",\n        \"state\": \"IL\",\n        \"lat\": 41.3676625,\n        \"lon\": -89.0099695,\n        \"location_precision\": \"exit\"\n      },\n      \"price_per_gallon\": 3.0423,\n      \"distance_from_start_miles\": 855.5,\n      \"offset_miles\": 0.01,\n      \"fuel_on_arrival_miles\": 0.0,\n      \"fuel_added_miles\": 499.2,\n      \"gallons\": 49.92,\n      \"cost\": 151.86\n    },\n    {\n      \"station\": {\n        \"opis_id\": 52548,\n        \"name\": \"Henderson Fuel Mart\",\n        \"address\": \"I-80, EXIT 342\",\n        \"city\": \"Henderson\",\n        \"state\": \"NE\",\n        \"lat\": 40.821134,\n        \"lon\": -97.807004,\n        \"location_precision\": \"exit\"\n      },\n      \"price_per_gallon\": 2.899,\n      \"distance_from_start_miles\": 1354.7,\n      \"offset_miles\": 0.01,\n      \"fuel_on_arrival_miles\": 0.0,\n      \"fuel_added_miles\": 500.0,\n      \"gallons\": 50.0,\n      \"cost\": 144.95\n    },\n    {\n      \"station\": {\n        \"opis_id\": 60700,\n        \"name\": \"PWI #502\",\n        \"address\": \"I-70/US-40, EXIT 259\",\n        \"city\": \"Golden\",\n        \"state\": \"CO\",\n        \"lat\": 39.7078,\n        \"lon\": -105.22975,\n        \"location_precision\": \"city\"\n      },\n      \"price_per_gallon\": 3.199,\n      \"distance_from_start_miles\": 1792.2,\n      \"offset_miles\": 0.65,\n      \"fuel_on_arrival_miles\": 61.9,\n      \"fuel_added_miles\": 438.1,\n      \"gallons\": 43.81,\n      \"cost\": 140.16\n    },\n    {\n      \"station\": {\n        \"opis_id\": 71712,\n        \"name\": \"MAVERIK COUNTRY STORE #693\",\n        \"address\": \"I-70, Exit 160 & hwy 191\",\n        \"city\": \"Green River\",\n        \"state\": \"UT\",\n        \"lat\": 38.990517,\n        \"lon\": -110.188473,\n        \"location_precision\": \"exit\"\n      },\n      \"price_per_gallon\": 3.2823,\n      \"distance_from_start_miles\": 2121.6,\n      \"offset_miles\": 0.03,\n      \"fuel_on_arrival_miles\": 169.9,\n      \"fuel_added_miles\": 231.2,\n      \"gallons\": 23.12,\n      \"cost\": 75.9\n    },\n    {\n      \"station\": {\n        \"opis_id\": 72965,\n        \"name\": \"Maverik #674\",\n        \"address\": \"I-15, Exit 45\",\n        \"city\": \"North Las Vegas\",\n        \"state\": \"NV\",\n        \"lat\": 36.1967535,\n        \"lon\": -115.138326,\n        \"location_precision\": \"exit\"\n      },\n      \"price_per_gallon\": 3.2823,\n      \"distance_from_start_miles\": 2522.7,\n      \"offset_miles\": 0.01,\n      \"fuel_on_arrival_miles\": 0.0,\n      \"fuel_added_miles\": 271.0,\n      \"gallons\": 27.1,\n      \"cost\": 88.96\n    }\n  ],\n  \"points\": [\n    [\n      40.712154,\n      -74.005621\n    ],\n    [\n      40.71213,\n      -74.005693\n    ],\n    [\n      34.052218,\n      -118.243395\n    ],\n    [\n      34.052335,\n      -118.243564\n    ]\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "name": "Short route: Dallas to Houston (no stops)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const METRES_PER_MILE = 1609.344;",
+              "const query = pm.request.url.query.toObject(true);",
+              "const maxRange = Number(query.max_range_miles ?? 500);",
+              "const startFuel = Number(query.start_fuel_miles ?? maxRange);",
+              "const reserve = Number(query.reserve_miles ?? 0);",
+              "const mpg = Number(query.mpg ?? 10);",
+              "const body = pm.response.json();",
+              "const routeMiles = body.distance_m / METRES_PER_MILE;",
+              "",
+              "console.log(`${routeMiles.toFixed(1)} mi on the road, ${startFuel - reserve} mi of usable start fuel`);",
+              "",
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "",
+              "pm.test('The route is under 500 mi and the start fuel covers it', () => {",
+              "    pm.expect(routeMiles).to.be.below(500);",
+              "    pm.expect(routeMiles).to.be.below(startFuel - reserve);",
+              "});",
+              "",
+              "pm.test('No fuel stops are needed', () => {",
+              "    pm.expect(body.stops).to.eql([]);",
+              "});",
+              "",
+              "pm.test('Nothing is bought, so the totals are zero', () => {",
+              "    pm.expect(body.total_cost).to.equal(0);",
+              "    pm.expect(body.total_gallons).to.equal(0);",
+              "    pm.expect(body.total_detour_miles).to.equal(0);",
+              "});",
+              "",
+              "pm.test('The route itself is still returned', () => {",
+              "    pm.expect(body.points).to.be.an('array').with.length.above(1);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/find-route/?start=32.7767,-96.7970&finish=29.7604,-95.3698",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "find-route",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "32.7767,-96.7970",
+              "description": "`lat,lon` in the contiguous US"
+            },
+            {
+              "key": "finish",
+              "value": "29.7604,-95.3698",
+              "description": "`lat,lon` in the contiguous US, at least 1 km from start"
+            },
+            {
+              "key": "profile",
+              "value": "truck",
+              "description": "`truck` or `car`. Default `truck`",
+              "disabled": true
+            },
+            {
+              "key": "max_range_miles",
+              "value": "500",
+              "description": "Miles on a full tank. Default 500",
+              "disabled": true
+            },
+            {
+              "key": "start_fuel_miles",
+              "value": "500",
+              "description": "Miles the starting fuel lasts. Default a full tank",
+              "disabled": true
+            },
+            {
+              "key": "reserve_miles",
+              "value": "0",
+              "description": "Fuel always kept in the tank, in miles. Default 0",
+              "disabled": true
+            },
+            {
+              "key": "mpg",
+              "value": "10",
+              "description": "Miles per gallon. Default 10",
+              "disabled": true
+            },
+            {
+              "key": "corridor_miles",
+              "value": "3",
+              "description": "How far off the route a station may be. Default 3",
+              "disabled": true
+            },
+            {
+              "key": "min_stop_saving",
+              "value": "5",
+              "description": "Dollars a stop must save to be worth making. Default 5",
+              "disabled": true
+            }
+          ]
+        },
+        "description": "About 239 mi on the road, well inside the default full 500-mile tank, so `stops` is empty and the totals are zero. Fuel already in the tank at the start costs nothing."
+      },
+      "response": [
+        {
+          "name": "No stops",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/find-route/?start=32.7767,-96.7970&finish=29.7604,-95.3698",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "find-route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "32.7767,-96.7970",
+                  "description": "`lat,lon` in the contiguous US"
+                },
+                {
+                  "key": "finish",
+                  "value": "29.7604,-95.3698",
+                  "description": "`lat,lon` in the contiguous US, at least 1 km from start"
+                },
+                {
+                  "key": "profile",
+                  "value": "truck",
+                  "description": "`truck` or `car`. Default `truck`",
+                  "disabled": true
+                },
+                {
+                  "key": "max_range_miles",
+                  "value": "500",
+                  "description": "Miles on a full tank. Default 500",
+                  "disabled": true
+                },
+                {
+                  "key": "start_fuel_miles",
+                  "value": "500",
+                  "description": "Miles the starting fuel lasts. Default a full tank",
+                  "disabled": true
+                },
+                {
+                  "key": "reserve_miles",
+                  "value": "0",
+                  "description": "Fuel always kept in the tank, in miles. Default 0",
+                  "disabled": true
+                },
+                {
+                  "key": "mpg",
+                  "value": "10",
+                  "description": "Miles per gallon. Default 10",
+                  "disabled": true
+                },
+                {
+                  "key": "corridor_miles",
+                  "value": "3",
+                  "description": "How far off the route a station may be. Default 3",
+                  "disabled": true
+                },
+                {
+                  "key": "min_stop_saving",
+                  "value": "5",
+                  "description": "Dollars a stop must save to be worth making. Default 5",
+                  "disabled": true
+                }
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"profile\": \"truck\",\n  \"start\": {\n    \"lat\": 32.7767,\n    \"lon\": -96.797\n  },\n  \"finish\": {\n    \"lat\": 29.7604,\n    \"lon\": -95.3698\n  },\n  \"distance_m\": 384382.2,\n  \"duration_s\": 21435.8,\n  \"total_cost\": 0,\n  \"total_gallons\": 0,\n  \"total_detour_miles\": 0,\n  \"stops\": [],\n  \"points\": [\n    [\n      32.775944,\n      -96.796753\n    ],\n    [\n      32.776079,\n      -96.796167\n    ],\n    [\n      29.760087,\n      -95.370104\n    ],\n    [\n      29.760424,\n      -95.369841\n    ]\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "name": "Invalid input: start outside the US",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "",
+              "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+              "",
+              "pm.test('The response is JSON', () => {",
+              "    pm.response.to.have.header('Content-Type', 'application/json');",
+              "});",
+              "",
+              "pm.test('The error is listed under the start field', () => {",
+              "    pm.expect(body).to.eql({start: ['Point must be within the contiguous United States.']});",
+              "});",
+              "",
+              "pm.test('No route or traceback leaks into the response', () => {",
+              "    pm.expect(pm.response.text()).to.not.match(/Traceback|points|stops/);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/find-route/?start=51.5074,-0.1278&finish=34.0522,-118.2437",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "find-route",
+            ""
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "51.5074,-0.1278",
+              "description": "`lat,lon` in the contiguous US"
+            },
+            {
+              "key": "finish",
+              "value": "34.0522,-118.2437",
+              "description": "`lat,lon` in the contiguous US, at least 1 km from start"
+            },
+            {
+              "key": "profile",
+              "value": "truck",
+              "description": "`truck` or `car`. Default `truck`",
+              "disabled": true
+            },
+            {
+              "key": "max_range_miles",
+              "value": "500",
+              "description": "Miles on a full tank. Default 500",
+              "disabled": true
+            },
+            {
+              "key": "start_fuel_miles",
+              "value": "500",
+              "description": "Miles the starting fuel lasts. Default a full tank",
+              "disabled": true
+            },
+            {
+              "key": "reserve_miles",
+              "value": "0",
+              "description": "Fuel always kept in the tank, in miles. Default 0",
+              "disabled": true
+            },
+            {
+              "key": "mpg",
+              "value": "10",
+              "description": "Miles per gallon. Default 10",
+              "disabled": true
+            },
+            {
+              "key": "corridor_miles",
+              "value": "3",
+              "description": "How far off the route a station may be. Default 3",
+              "disabled": true
+            },
+            {
+              "key": "min_stop_saving",
+              "value": "5",
+              "description": "Dollars a stop must save to be worth making. Default 5",
+              "disabled": true
+            }
+          ]
+        },
+        "description": "The start is in London. The API rejects it before calling the routing provider and returns a 400 in Django REST Framework's standard format, with the error listed under the field that caused it."
+      },
+      "response": [
+        {
+          "name": "Start outside the US",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/find-route/?start=51.5074,-0.1278&finish=34.0522,-118.2437",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "find-route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "51.5074,-0.1278",
+                  "description": "`lat,lon` in the contiguous US"
+                },
+                {
+                  "key": "finish",
+                  "value": "34.0522,-118.2437",
+                  "description": "`lat,lon` in the contiguous US, at least 1 km from start"
+                },
+                {
+                  "key": "profile",
+                  "value": "truck",
+                  "description": "`truck` or `car`. Default `truck`",
+                  "disabled": true
+                },
+                {
+                  "key": "max_range_miles",
+                  "value": "500",
+                  "description": "Miles on a full tank. Default 500",
+                  "disabled": true
+                },
+                {
+                  "key": "start_fuel_miles",
+                  "value": "500",
+                  "description": "Miles the starting fuel lasts. Default a full tank",
+                  "disabled": true
+                },
+                {
+                  "key": "reserve_miles",
+                  "value": "0",
+                  "description": "Fuel always kept in the tank, in miles. Default 0",
+                  "disabled": true
+                },
+                {
+                  "key": "mpg",
+                  "value": "10",
+                  "description": "Miles per gallon. Default 10",
+                  "disabled": true
+                },
+                {
+                  "key": "corridor_miles",
+                  "value": "3",
+                  "description": "How far off the route a station may be. Default 3",
+                  "disabled": true
+                },
+                {
+                  "key": "min_stop_saving",
+                  "value": "5",
+                  "description": "Dollars a stop must save to be worth making. Default 5",
+                  "disabled": true
+                }
+              ]
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"start\": [\n    \"Point must be within the contiguous United States.\"\n  ]\n}"
+        }
+      ]
+    }
+  ]
+}

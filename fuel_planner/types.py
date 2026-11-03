@@ -106,9 +106,11 @@ class FuelPlan:
         total_gallons: The fuel bought over the trip.
         total_detour_miles: The miles driven off the route to reach the stops.
         total_cost: The sum of the stop costs, in dollars.
+        corridor_stations: How many stations were within the corridor, as candidates.
     """
 
     stops: list[FuelStop]
     total_gallons: float
     total_detour_miles: float
     total_cost: float
+    corridor_stations: int

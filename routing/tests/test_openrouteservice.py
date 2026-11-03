@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 import httpx
@@ -118,6 +119,28 @@ def test_error_mapping(name, error):
     message = load_fixture(name)['body']['error']
     message = message['message'] if isinstance(message, dict) else message
     assert message not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    'name, code, coordinates',
+    [
+        ('ors_error_point_not_found.json', 2010, '-90.0 27.0'),
+        ('ors_error_route_not_found.json', 2009, '(-157.86 21.31) and 2 (-156.47 20.89)'),
+        ('ors_error_limit_exceeded.json', 2004, None),
+    ],
+)
+def test_route_errors_are_logged_with_rounded_coordinates(caplog, name, code, coordinates):
+    """Errors that become a 422 log the ORS code and message, with coordinates rounded."""
+    provider = make_provider(lambda request: fixture_response(name))
+    with caplog.at_level(logging.INFO, logger='routing'), pytest.raises((RouteNotFound, InvalidRouteRequest)):
+        provider.route([START, FINISH], Profile.TRUCK)
+
+    [record] = caplog.records
+    assert record.levelno == logging.INFO
+    message = record.getMessage()
+    assert f'code {code}' in message
+    if coordinates is not None:
+        assert coordinates in message
 
 
 @pytest.mark.parametrize(

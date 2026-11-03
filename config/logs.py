@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import traceback
+from contextvars import ContextVar
 from datetime import UTC, datetime
 
 # Attributes every LogRecord has. Anything else on a record was passed with `extra=`.
@@ -19,6 +20,10 @@ RECORD_ATTRS = frozenset(vars(logging.makeLogRecord({}))) | {'message', 'asctime
 # Extras to leave out. Django passes the HttpRequest as `request` with its 5xx errors; the
 # path is already in the message.
 DROPPED_EXTRAS = frozenset({'request'})
+
+# The ID of the request being handled, set by api.middleware.AccessLogMiddleware. None
+# outside a request, e.g. in management commands.
+request_id: ContextVar[str | None] = ContextVar('request_id', default=None)
 
 # Installed packages live here, even when the virtualenv is inside the project.
 PYTHON_DIRS = tuple({sys.prefix, sys.base_prefix, sys.exec_prefix})
@@ -57,6 +62,20 @@ class TracebackOnlyFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         """Return whether the record has exception info."""
         return bool(record.exc_info)
+
+
+class RequestIdFilter(logging.Filter):
+    """Add the current request's ID to each record, as a "request_id" context field.
+
+    Records logged outside a request are left unchanged.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Add the request ID, if there is one, and keep the record."""
+        current = request_id.get()
+        if current is not None:
+            record.request_id = current
+        return True
 
 
 class ProjectFormatter(logging.Formatter):

@@ -150,6 +150,29 @@ only written to the server logs.
 {"detail": "No drivable route was found between start and finish.", "code": "route_not_found"}
 ```
 
+## Logs
+
+Logs go to the console, as plain text or JSON (`LOG_CONSOLE_FORMAT`), and optionally to a
+rotating JSON file (`LOG_FILE_ENABLED`). A request logs:
+
+- **One access line**, with the method, path, `status`, `duration_ms` and `query`. Server
+  errors (5xx) are logged at ERROR and everything else at INFO, since a 4xx is intentional behavior.
+- **The outcome.** `Planned the fuel stops.` with the `stops`, `total_cost`,
+  `route_miles`, the stations in the bounding box and in the corridor, `routing_ms` (the
+  ORS call) and `planning_ms` (loading stations and planning). Or `Request failed.` with
+  the error `code`, and for `no_feasible_fuel_plan` the station counts and usable range.
+- **ORS errors**, with the HTTP status and the ORS code and message.
+
+Every line logged during a request has a `request_id`, which is also returned in the
+`X-Request-ID` response header. Coordinates are rounded to 2 decimals (about 1 km) in the
+query and in ORS messages, so the logs don't record exact addresses. The first request to
+use a routing provider logs which one it is, as a warning for the fake one.
+
+```
+INFO api/views.py:150: Planned the fuel stops. stops=6 total_cost=710.59 route_miles=2793.7 stations_in_box=3315 stations_in_corridor=323 routing_ms=1863 planning_ms=107 request_id=0e9b7411...
+INFO api/middleware.py:65: GET /api/find-route/ status=200 duration_ms=1981 query=start=40.71,-74.01&finish=34.05,-118.24 request_id=0e9b7411...
+```
+
 ## Fuel station data
 
 `python manage.py ingest_fuel_stations` loads the stations into the `FuelStation` model
@@ -297,6 +320,20 @@ The tests make no network calls and need no API key:
 
 pytest uses `config/settings_test.py`, which turns file logging off.
 
+### Postman collection
+
+[`postman/fuel-route-planner.postman_collection.json`](postman/fuel-route-planner.postman_collection.json)
+has three requests against a running server: New York to Los Angeles (several stops),
+Dallas to Houston (no stops) and a start outside the US (400). Each has tests and a saved
+example response. The long route's tests walk the trip stop by stop, checking the fuel,
+gallons and cost at each, and its Visualize tab shows the stops as a table. Set the
+`baseUrl` collection variable if the server isn't on `http://localhost:8000`. The
+requests call ORS, so they need an API key. To run them from the command line:
+
+```bash
+npx newman run postman/fuel-route-planner.postman_collection.json
+```
+
 ### Notebook
 
 [`notebooks/station_data.ipynb`](notebooks/station_data.ipynb) explores the fuel data and
@@ -317,7 +354,7 @@ api/                     HTTP layer
   serializers.py         Query parameter parsing and validation
   validators.py          US bounding box and minimum distance
   services.py            Builds the routing provider, loads stations near a route
-  middleware.py          Access log, one line per request
+  middleware.py          Request IDs and the access log, one line per request
 routing/                 Provider-independent routing, no Django imports
   types.py               LatLon, Profile, Route
   errors.py              RouteNotFound, InvalidRouteRequest, RoutingUnavailable

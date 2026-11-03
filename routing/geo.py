@@ -1,4 +1,5 @@
 import math
+import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -11,6 +12,12 @@ EARTH_RADIUS_M = 6_371_008.8
 # Size of the grid cells that index a Polyline's segments, in degrees (about 11 km of
 # latitude).
 GRID_CELL_DEG = 0.1
+
+# Decimal places kept when coordinates are written to logs. Two places are about 1 km:
+# close enough to debug a request, without recording an exact address.
+LOGGED_COORDINATE_PLACES = 2
+
+DECIMAL_NUMBER = re.compile(r'\d+\.\d+')
 
 
 def haversine_m(a: LatLon, b: LatLon) -> float:
@@ -32,6 +39,22 @@ def haversine_m(a: LatLon, b: LatLon) -> float:
         + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
     )
     return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(h)))
+
+
+def round_coordinates(text: str, places: int = LOGGED_COORDINATE_PLACES) -> str:
+    """Round every decimal number in the text, to keep exact locations out of logs.
+
+    Works on any text, so it also covers malformed coordinates and provider messages
+    that quote them. Numbers without a decimal point are left alone.
+
+    Args:
+        text: The text, e.g. "40.7128,-74.0060".
+        places: The decimal places to keep.
+
+    Returns:
+        The text with each decimal number rounded, e.g. "40.71,-74.01".
+    """
+    return DECIMAL_NUMBER.sub(lambda m: str(round(float(m.group()), places)), text)
 
 
 @dataclass(frozen=True)

@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from django.urls import reverse
 from rest_framework import status
@@ -56,14 +58,45 @@ def test_no_stops_when_the_tank_covers_the_trip(api_client):
     assert data['total_gallons'] == 0
 
 
-def test_no_feasible_plan(api_client, make_station):
-    """A trip that no station can complete gives a 422."""
+def view_records(caplog):
+    """Return the records logged by the view."""
+    return [r for r in caplog.records if r.name == 'api.views']
+
+
+def test_plan_is_logged(api_client, make_station, caplog):
+    """A successful plan logs the stops, cost, station counts and timings."""
+    make_station(*on_line(0.6), 3.00)
+    make_station(*on_line(0.5, north_miles=5), 2.00)  # In the box, outside the corridor.
+
+    with caplog.at_level(logging.INFO, logger='api.views'):
+        data = api_client.get(URL, TRIP).json()
+
+    [record] = view_records(caplog)
+    assert record.getMessage() == 'Planned the fuel stops.'
+    assert record.stops == 1
+    assert record.total_cost == data['total_cost']
+    assert record.route_miles == pytest.approx(data['distance_m'] / 1609.344, abs=0.1)
+    assert record.stations_in_box == 2
+    assert record.stations_in_corridor == 1
+    assert record.routing_ms >= 0
+    assert record.planning_ms >= 0
+
+
+def test_no_feasible_plan(api_client, make_station, caplog):
+    """A trip that no station can complete gives a 422, logged with why."""
     make_station(*on_line(0.9), 3.0)
 
-    response = api_client.get(URL, TRIP)
+    with caplog.at_level(logging.INFO, logger='api.views'):
+        response = api_client.get(URL, TRIP | {'reserve_miles': 50})
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     assert response.json()['code'] == 'no_feasible_fuel_plan'
+    [record] = view_records(caplog)
+    assert record.code == 'no_feasible_fuel_plan'
+    assert record.stations_in_box == 1
+    assert record.stations_in_corridor == 1
+    assert record.usable_range_miles == 450
+    assert record.route_miles > 450
 
 
 def test_start_fuel_and_reserve(api_client, make_station):

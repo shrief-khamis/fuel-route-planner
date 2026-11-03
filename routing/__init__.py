@@ -1,6 +1,6 @@
 from .base import RoutingProvider
 from .errors import InvalidRouteRequest, RouteNotFound, RoutingError, RoutingUnavailable
-from .geo import LinePosition, Polyline, haversine_m
+from .geo import LinePosition, Polyline, haversine_m, round_coordinates
 from .types import LatLon, Profile, Route
 
 __all__ = [
@@ -15,4 +15,5 @@ __all__ = [
     'RoutingProvider',
     'RoutingUnavailable',
     'haversine_m',
+    'round_coordinates',
 ]

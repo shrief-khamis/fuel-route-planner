@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from django.urls import reverse
 from rest_framework import status
@@ -153,10 +155,11 @@ def test_field_errors_skip_distance_check(api_client):
         (RoutingUnavailable('ORS 403 raw message'), 503, 'routing_unavailable'),
     ],
 )
-def test_routing_errors(api_client, stub_provider, error, http_status, code):
-    """Routing errors map to 422 or 503 with a generic body."""
+def test_routing_errors(api_client, stub_provider, caplog, error, http_status, code):
+    """Routing errors map to 422 or 503 with a generic body, and their code is logged."""
     stub_provider(error)
-    response = api_client.get(URL, {'start': NYC, 'finish': CHICAGO})
+    with caplog.at_level(logging.INFO, logger='api.views'):
+        response = api_client.get(URL, {'start': NYC, 'finish': CHICAGO})
 
     assert response.status_code == http_status
     data = response.json()
@@ -164,6 +167,10 @@ def test_routing_errors(api_client, stub_provider, error, http_status, code):
     assert data['code'] == code
     assert 'ORS' not in data['detail']
     assert 'raw message' not in response.content.decode()
+    [record] = [r for r in caplog.records if r.name == 'api.views']
+    assert record.getMessage() == 'Request failed.'
+    assert record.code == code
+    assert record.routing_ms >= 0
 
 
 def test_post_not_allowed(api_client):

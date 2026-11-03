@@ -187,12 +187,13 @@ if LOG_CONSOLE_FORMAT not in ('plain', 'json'):
 
 # Our own packages log at LOG_LEVEL; dependencies only at WARNING and above. The handlers
 # use LOG_LEVEL too, so a stricter level also quiets dependencies.
-LOG_PROJECT_PACKAGES = ['api', 'config', 'routing', 'stations']
+LOG_PROJECT_PACKAGES = ['api', 'config', 'fuel_planner', 'routing', 'stations']
 
 LOG_HANDLERS = {
     'console': {
         'class': 'logging.StreamHandler',
         'formatter': LOG_CONSOLE_FORMAT,
+        'filters': ['request_id'],
         'level': LOG_LEVEL,
     },
 }
@@ -205,6 +206,7 @@ if LOG_FILE_ENABLED:
         'backupCount': LOG_FILE_BACKUP_COUNT,
         'encoding': 'utf-8',
         'formatter': 'json',
+        'filters': ['request_id'],
         'level': LOG_LEVEL,
     }
 
@@ -222,6 +224,9 @@ LOGGING = {
         },
     },
     'filters': {
+        'request_id': {
+            '()': 'config.logs.RequestIdFilter',
+        },
         'traceback_only': {
             '()': 'config.logs.TracebackOnlyFilter',
         },

@@ -5,6 +5,7 @@ import httpx
 
 from ..base import check_waypoints
 from ..errors import InvalidRouteRequest, RouteNotFound, RoutingUnavailable
+from ..geo import round_coordinates
 from ..types import LatLon, Profile, Route
 
 logger = logging.getLogger(__name__)
@@ -135,9 +136,10 @@ class OpenRouteServiceProvider:
     def _raise_for_error(self, response: httpx.Response) -> None:
         """Raise the routing error that matches an ORS error response.
 
-        Rejected credentials (401/403) and rate limits (429) are logged and mapped to
-        RoutingUnavailable. Other 4xx responses are mapped by their ORS error code. Any
-        other code is a bug in this adapter, since we validate input before calling ORS.
+        Every error is logged with the ORS message, its coordinates rounded. Rejected
+        credentials (401/403) and rate limits (429) are mapped to RoutingUnavailable. Other
+        4xx responses are mapped by their ORS error code. Any other code is a bug in this
+        adapter, since we validate input before calling ORS.
 
         Args:
             response: A response whose status code is not 200.
@@ -149,6 +151,8 @@ class OpenRouteServiceProvider:
         """
         status = response.status_code
         code, message = _error_details(response)
+        # ORS quotes the waypoints in some messages; keep exact locations out of the logs.
+        message = round_coordinates(message)
 
         if status in (401, 403):
             logger.error(
@@ -160,8 +164,11 @@ class OpenRouteServiceProvider:
             logger.warning('OpenRouteService rate limit hit (HTTP 429: %s).', message)
             raise RoutingUnavailable('Routing provider rate limit exceeded.')
         if 400 <= status < 500 and code in ROUTE_NOT_FOUND_CODES:
+            logger.info('OpenRouteService found no route (HTTP %s, code %s): %s', status, code, message)
             raise RouteNotFound('No route found between the waypoints.')
         if 400 <= status < 500 and code in LIMIT_EXCEEDED_CODES:
+            logger.info('OpenRouteService refused the request as over its limits (HTTP %s, code %s): %s',
+                        status, code, message)
             raise InvalidRouteRequest('Route request exceeds provider limits.')
 
         log = logger.warning if status >= 500 else logger.error

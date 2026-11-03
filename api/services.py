@@ -1,3 +1,6 @@
+import functools
+import logging
+
 import httpx
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -8,11 +11,14 @@ from routing.providers.fake import FakeRoutingProvider
 from routing.providers.openrouteservice import OpenRouteServiceProvider
 from stations.models import FuelStation
 
+logger = logging.getLogger(__name__)
+
 
 def get_routing_provider() -> RoutingProvider:
     """Build the routing provider named by the ROUTING_PROVIDER setting.
 
-    This is the only place that reads Django settings for the routing package.
+    This is the only place that reads Django settings for the routing package. The first
+    time each provider is built, it is logged.
 
     Returns:
         A new OpenRouteServiceProvider for "openrouteservice", or a new
@@ -23,6 +29,7 @@ def get_routing_provider() -> RoutingProvider:
     """
     name = settings.ROUTING_PROVIDER
     if name == 'openrouteservice':
+        log_provider_choice(name)
         return OpenRouteServiceProvider(
             api_key=settings.ORS_API_KEY,
             base_url=settings.ORS_BASE_URL,
@@ -32,10 +39,27 @@ def get_routing_provider() -> RoutingProvider:
             ),
         )
     if name == 'fake':
+        log_provider_choice(name)
         return FakeRoutingProvider()
     raise ImproperlyConfigured(
         f"Unknown ROUTING_PROVIDER {name!r}; expected 'openrouteservice' or 'fake'."
     )
+
+
+@functools.cache
+def log_provider_choice(name: str) -> None:
+    """Log which routing provider is in use, the first time each one is built.
+
+    The fake provider is logged as a warning, since its straight lines are easy to mistake
+    for real routes.
+
+    Args:
+        name: The ROUTING_PROVIDER setting, "openrouteservice" or "fake".
+    """
+    if name == 'fake':
+        logger.warning('Using the fake routing provider: routes are straight lines, not roads.')
+    else:
+        logger.info('Using the OpenRouteService routing provider.', extra={'base_url': settings.ORS_BASE_URL})
 
 
 def stations_near(line: Polyline, margin_miles: float) -> list[Station]:

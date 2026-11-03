@@ -1,6 +1,6 @@
 import pytest
 
-from routing import LatLon, Polyline, haversine_m
+from routing import LatLon, Polyline, haversine_m, round_coordinates
 
 NYC = LatLon(40.7128, -74.0060)
 CHICAGO = LatLon(41.8781, -87.6298)
@@ -101,3 +101,15 @@ def test_bounding_box_with_margin():
     assert north_east.lat == pytest.approx(CHICAGO.lat + 10_000 / 111_195, rel=0.001)
     assert south_west.lon < CHICAGO.lon and north_east.lon > NYC.lon
     assert haversine_m(LatLon(CHICAGO.lat, south_west.lon), CHICAGO) == pytest.approx(10_000, rel=0.001)
+
+
+@pytest.mark.parametrize(('text', 'rounded'), [
+    ('40.7128,-74.0060', '40.71,-74.01'),
+    ('point 1 (-157.8583000 21.3069000)', 'point 1 (-157.86 21.31)'),
+    ('40,-74', '40,-74'),
+    ('a radius of 5000.0 meters', 'a radius of 5000.0 meters'),
+    ('', ''),
+])
+def test_round_coordinates(text, rounded):
+    """Every decimal number is rounded to two places; other text is unchanged."""
+    assert round_coordinates(text) == rounded

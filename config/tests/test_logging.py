@@ -6,7 +6,7 @@ import sys
 import pytest
 from django.conf import settings
 
-from config.logs import JsonFormatter, PlainFormatter
+from config.logs import JsonFormatter, PlainFormatter, RequestIdFilter, request_id
 
 PROJECT_FILE = str(settings.BASE_DIR / 'routing' / 'geo.py')
 DEPENDENCY_FILE = os.path.join(sys.prefix, 'lib', 'site-packages', 'django', 'utils', 'log.py')
@@ -104,6 +104,31 @@ def test_plain_format():
     assert text.endswith(f" INFO {os.path.join('routing', 'geo.py')}:7: GET /api/ status=200 duration_ms=12")
 
 
+def test_request_id_filter_adds_the_current_id():
+    """During a request, records get its ID as a context field."""
+    record = make_record()
+    token = request_id.set('abc123')
+    try:
+        assert RequestIdFilter().filter(record) is True
+    finally:
+        request_id.reset(token)
+    assert format_json(record)['context'] == {'request_id': 'abc123'}
+
+
+def test_request_id_filter_outside_a_request():
+    """Outside a request, records are kept unchanged."""
+    record = make_record()
+    assert RequestIdFilter().filter(record) is True
+    assert not hasattr(record, 'request_id')
+
+
+def test_handlers_add_the_request_id():
+    """Every handler that writes records runs the request ID filter."""
+    for name, handler in settings.LOGGING['handlers'].items():
+        if name != 'null':
+            assert 'request_id' in handler['filters']
+
+
 def test_tests_do_not_write_log_files():
     """The test settings turn the file handler off, whatever .env says."""
     assert settings.LOG_FILE_ENABLED is False
@@ -141,6 +166,7 @@ def is_written(name, level, with_traceback=False):
 @pytest.mark.parametrize(('name', 'level', 'with_traceback', 'written'), [
     ('routing.providers.openrouteservice', logging.INFO, False, True),
     ('api.middleware', logging.INFO, False, True),
+    ('fuel_planner.planner', logging.INFO, False, True),
     ('httpx', logging.INFO, False, False),
     ('httpx', logging.WARNING, False, True),
     ('django.utils.autoreload', logging.INFO, False, False),

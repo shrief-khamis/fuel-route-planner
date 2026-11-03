@@ -3,6 +3,7 @@ from collections.abc import Iterable
 from routing import Polyline
 
 from .corridor import stations_along
+from .errors import NoFeasiblePlan
 from .optimizer import cheapest_purchases
 from .types import METRES_PER_MILE, FuelPlan, FuelStop, PlanOptions, Station
 
@@ -23,10 +24,14 @@ def plan_fuel_stops(line: Polyline, stations: Iterable[Station], options: PlanOp
 
     Raises:
         NoFeasiblePlan: No choice of stations reaches the finish without dipping into the
-            reserve.
+            reserve. Its corridor_stations is set.
     """
     candidates = stations_along(line, stations, options.corridor_miles)
-    purchases = cheapest_purchases(candidates, line.length_m / METRES_PER_MILE, options)
+    try:
+        purchases = cheapest_purchases(candidates, line.length_m / METRES_PER_MILE, options)
+    except NoFeasiblePlan as exc:
+        exc.corridor_stations = len(candidates)
+        raise
 
     stops = []
     for purchase in purchases:
@@ -46,4 +51,5 @@ def plan_fuel_stops(line: Polyline, stations: Iterable[Station], options: PlanOp
         total_gallons=sum(s.gallons for s in stops),
         total_detour_miles=sum(2 * s.offset_miles for s in stops),
         total_cost=round(sum(s.cost for s in stops), 2),
+        corridor_stations=len(candidates),
     )
