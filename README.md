@@ -290,6 +290,70 @@ corridor, which holds a few hundred stations.
   kilometre of the interchange. City-located stations can be several kilometres off, and
   in large cities such as Phoenix or El Paso, tens of kilometres.
 
+## Designing for production
+
+This project runs with nothing beyond an ORS key: SQLite, the public ORS API, and a fuel
+price CSV loaded once. For production I'd change the following. Each item names the
+limitation above that it lifts.
+
+### API
+
+- **POST, or QUERY where supported, instead of GET.** GET suits this scope (see
+  [Assumptions and decisions](#assumptions-and-decisions)), but coordinates in a URL end
+  up in proxy and server logs, browser history and `Referer` headers, and a trip's start
+  is often a home or a depot. A request body keeps them out, and carries credentials and
+  larger inputs such as a vehicle profile more naturally. QUERY is the better fit where
+  clients and proxies support it: like GET, it is safe to repeat and its responses can be
+  cached. POST works everywhere but loses both.
+- **Authentication, rate limiting and caching.** A key per customer, quotas per key so no
+  single caller uses up the routing capacity, and a cache of recent routes keyed on the
+  rounded points and the vehicle. Lifts *No authentication, rate limiting or caching*.
+- **Smaller responses.** Simplify the route line to the detail a map needs, and send it
+  as an encoded polyline instead of `[lat, lon]` pairs. Lifts *Large responses*.
+
+### Routing
+
+- **A self-hosted routing engine.** ORS can run on our own servers from the same
+  OpenStreetMap data. On a coast-to-coast trip the ORS call takes about 1.9 s of a 2 s
+  request, so this is where request time goes. It also removes the distance cap and the
+  quotas. Lifts *6,000 km cap* and *ORS quotas*.
+- **Routing through the chosen stops.** A second request, with the stops as waypoints,
+  gives the real route and exact detours instead of estimates from the straight-line
+  offset. With a self-hosted engine the extra request is cheap. Lifts *Stops are not on
+  the route line*.
+
+### Planning model
+
+- **Cost beyond fuel.** The plan would minimise the whole trip's cost: fuel, tolls, and
+  driving time, including the time each stop adds. Fuel use would vary along the route
+  instead of being one `mpg`: speed limits set the speed on each stretch, and a loaded
+  truck uses far more fuel climbing than on the flat. Required rest breaks under
+  hours-of-service rules would be planned too, since they are natural places to refuel.
+  Lifts *No time cost*, and the single `mpg` in
+  [Assumptions and decisions](#assumptions-and-decisions).
+- **Per-vehicle profiles.** Each vehicle would have its own profile: tank size, fuel use
+  by speed, load and grade, fuel type, and its height, weight, axles and any hazardous
+  goods. The dimensions and weight go to the routing engine, so routes avoid low bridges
+  and weight-limited roads; the rest feeds the planner. Lifts *No truck restrictions*.
+
+### Data
+
+- **PostgreSQL with PostGIS.** Postgres handles concurrent reads and writes. SQLite
+  allows one writer at a time, while the pipeline below writes all day as requests read.
+  PostGIS also moves the spatial work into the database. Stations in the corridor would
+  come from one indexed query on the route line, split into short pieces
+  (`ST_Subdivide`, `ST_DWithin`), and points would be checked against the real US
+  boundary instead of a box. This could speed up planning too: on a coast-to-coast trip,
+  loading the stations and keeping those in the corridor takes about 60 ms today, most
+  of it in Python. Lifts *The US check is a bounding box*.
+- **An ingestion pipeline.** Prices change daily, so they would arrive as scheduled feeds
+  instead of a CSV loaded once. Each price keeps its source and time, so the planner uses
+  the latest and skips stale ones. Station availability (closures, opening hours, fuel
+  outages) would come in the same way, and live traffic would feed the routing engine.
+  Station coordinates would come from the data provider or from geocoding the full
+  address, instead of from exits and cities. Lifts *One price per station* and *Station
+  locations are approximate*.
+
 ## Development
 
 `requirements.txt` has only what the API needs. `requirements-dev.txt` adds the test and
